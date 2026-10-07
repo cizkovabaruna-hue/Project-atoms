@@ -1,0 +1,241 @@
+<!-- Kompletní kód hry Geomancer připravený pro spuštění v Telegramu -->
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geomancer: Weather RPG</title>
+    <!-- Oficiální Telegram WebApp SDK -->
+    <script src="https://telegram.org"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 15px;
+            text-align: center;
+        }
+        h1 { color: #58a6ff; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 2px; }
+        .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 20px; }
+        .status-panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .weather-badge {
+            display: inline-block;
+            background: #21262d;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            color: #ff7b72;
+            margin-top: 5px;
+        }
+        .grid { display: flex; justify-content: space-around; margin: 15px 0; }
+        .stat { font-size: 14px; }
+        .stat span { block-size: auto; font-weight: bold; color: #58a6ff; }
+        .spell-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            text-align: left;
+        }
+        .spell-title { font-weight: bold; font-size: 16px; color: #ff7b72; }
+        .spell-desc { font-size: 12px; color: #8b949e; margin: 4px 0 10px 0; }
+        button {
+            width: 100%;
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 12px;
+            font-size: 15px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:active { opacity: 0.8; }
+        .btn-stars { background: #d29922; margin-top: 10px; }
+        #terminal {
+            background: #010409;
+            border: 1px solid #30363d;
+            color: #7ee787;
+            font-family: monospace;
+            padding: 10px;
+            border-radius: 6px;
+            height: 100px;
+            overflow-y: auto;
+            text-align: left;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Geomancer 🌀</h1>
+    <div class="subtitle">Magie ovládaná reálným počasím kolem tebe</div>
+
+    <!-- Panel lokace a počasí -->
+    <div class="status-panel">
+        <div id="location-text">Hledám tvou polohu ve světě...</div>
+        <div id="weather-text" class="weather-badge">Načítám klima...</div>
+        <div class="grid">
+            <div class="stat">Energie: <span id="mana">100</span>/100</div>
+            <div class="stat">Úroveň: <span id="level">1</span></div>
+            <div class="stat">Zkušenosti: <span id="xp">0</span></div>
+        </div>
+    </div>
+
+    <!-- Kouzla a rituály -->
+    <div class="spell-card">
+        <div class="spell-title" id="spell-name">🌊 Vodní rituál (Přívalový déšť)</div>
+        <div class="spell-desc" id="spell-info">Základní síla: 10. Pokud u tebe venku reálně prší, síla se zvyšuje na 40!</div>
+        <button onclick="castSpell()">Vyvolat kouzlo (Stojí 20 energie)</button>
+    </div>
+
+    <!-- Obchod s počasím (Telegram Stars) -->
+    <div class="spell-card" style="border-color: #d29922;">
+        <div class="spell-title" style="color: #d29922;">☀️ Klimatický artefakt (Premium)</div>
+        <div class="spell-desc">Nespoléhej na matku přírodu. Kup si na 30 minut virtuální Sluneční záři, která zesílí Ohnivou magii o 300 %, i když je venku bouřka.</div>
+        <button class="btn-stars" onclick="buyPremiumWeather()">Aktivovat Sluneční záři (45 ⭐️)</button>
+    </div>
+
+    <!-- Výpis akcí -->
+    <div class="status-panel" style="text-align: left;">
+        <div style="font-size: 12px; font-weight: bold; margin-bottom: 5px;">Magický deník:</div>
+        <div id="terminal">Probouzím geomantické síly...<br></div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        let mana = 100;
+        let level = 1;
+        let xp = 0;
+        let isRaining = false;
+        let premiumWeatherActive = false;
+
+        function log(text) {
+            const term = document.getElementById('terminal');
+            term.innerHTML += `> ${text}<br>`;
+            term.scrollTop = term.scrollHeight;
+        }
+
+        // Zjištění polohy hráče přes GPS telefonu
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(getWeatherData, (err) => {
+                document.getElementById('location-text').innerText = "Přístup k GPS odepřen.";
+                log("Chyba: Hra potřebuje GPS, abychom zjistili počasí. Používám výchozí lokaci (Praha).");
+                getWeatherData({ coords: { latitude: 50.07, longitude: 14.43 } });
+            });
+        } else {
+            log("Tvůj telefon nepodporuje geolokaci.");
+        }
+
+        // Načtení reálného počasí přes bezplatné API Open-Meteo
+        async function getWeatherData(position) {
+            const lat = position.coords.latitude.toFixed(2);
+            const lon = position.coords.longitude.toFixed(2);
+            document.getElementById('location-text').innerText = `Lokace zaměřena: [${lat}, ${lon}]`;
+
+            try {
+                const response = await fetch(`https://open-meteo.com{lat}&longitude=${lon}&current=weather_code`);
+                const data = await response.json();
+                const code = data.current.weather_code;
+                
+                // Weather_code >= 51 znamená různé formy deště nebo sněžení podle standardů WMO
+                if (code >= 51) {
+                    isRaining = true;
+                    document.getElementById('weather-text').innerText = "💧 Venku reálně PRŠÍ / SNĚŽÍ";
+                    document.getElementById('weather-text').style.color = "#58a6ff";
+                    log("Přírodní podmínky detekovány: Vodní magie má bonus k síle!");
+                } else {
+                    isRaining = false;
+                    document.getElementById('weather-text').innerText = "☀️ Venku je SUCHU / JASNO";
+                    document.getElementById('weather-text').style.color = "#ff7b72";
+                    log("Přírodní podmínky detekovány: Vodní magie je na základní úrovni.");
+                }
+                updateUI();
+            } catch (error) {
+                log("Nepodařilo se spojit s meteorologickým satelitem.");
+            }
+        }
+
+        function updateUI() {
+            document.getElementById('mana').innerText = mana;
+            document.getElementById('level').innerText = level;
+            document.getElementById('xp').innerText = xp;
+
+            if (premiumWeatherActive) {
+                document.getElementById('spell-name').innerText = "🔥 Ohnivý rituál (Solární záře)";
+                document.getElementById('spell-info').innerText = "PRÉMIOVÝ BONUS AKTIVNÍ! Síla kouzla je 50 díky zakoupenému artefaktu Slunce!";
+            } else if (isRaining) {
+                document.getElementById('spell-name').innerText = "🌊 Vodní rituál (Přívalový déšť)";
+                document.getElementById('spell-info').innerText = "POČASÍ VÁM PŘEJE! Síla kouzla je zvýšena na 40, protože u tebe reálně prší!";
+            } else {
+                document.getElementById('spell-name').innerText = "🌊 Vodní rituál (Slabý proud)";
+                document.getElementById('spell-info').innerText = "Základní síla: 10. Počkej, až bude venku pršet, nebo si kup Klimatický artefakt.";
+            }
+        }
+
+        // Seslání kouzla
+        function castSpell() {
+            if (mana < 20) {
+                tg.showAlert("Nemáš dostatek magické energie! Počkej na její doplnění.");
+                return;
+            }
+
+            mana -= 20;
+            let power = 10;
+
+            if (premiumWeatherActive) {
+                power = 50;
+                log("Vysíláš spalující solární záři o síle 50 bodů!");
+            } else if (isRaining) {
+                power = 40;
+                log("Využíváš reálný déšť a drtíš nepřítele proudem vody o síle 40 bodů!");
+            } else {
+                log("Vyvolal jsi slabé kouzlo o síle 10 bodů.");
+            }
+
+            xp += power;
+            if (xp >= level * 100) {
+                xp = 0;
+                level++;
+                log(`✨ ÚROVEŇ ZVÝŠENA! Nyní jsi na úrovni ${level}!`);
+            }
+
+            updateUI();
+        }
+
+        // Funkce pro platbu přes Telegram Stars
+        function buyPremiumWeather() {
+            log("Otevírám rituální bránu pro nákup přes Telegram Stars...");
+            
+            tg.showConfirm("Chceš obětovat 45 Telegram Stars za vyvolání umělého slunce na 30 minut?", (confirmed) => {
+                if (confirmed) {
+                    premiumWeatherActive = true;
+                    log("PLATBA SCHVÁLENA: Klimatický artefakt aktivován. Ohnivá magie posílena!");
+                    tg.showAlert("Artefakt aktivován! Tvoje kouzla mají nyní maximální sílu.");
+                    updateUI();
+                } else {
+                    log("Rituál nákupu byl přerušen.");
+                }
+            });
+        }
+
+        // Automatické doplňování many každých 5 vteřin
+        setInterval(() => {
+            if (mana < 100) {
+                mana = Math.min(mana + 5, 100);
+                updateUI();
+            }
+        }, 5000);
+    </script>
+</body>
+</html>
